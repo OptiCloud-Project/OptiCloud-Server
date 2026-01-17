@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 
+// Base File Schema - will be used for all tiers
 const FileSchema = new mongoose.Schema({
   fileName: {
     type: String,
@@ -14,13 +15,6 @@ const FileSchema = new mongoose.Schema({
     type: String, // Store as Base64 string
     required: true,
     select: false // Don't load file data by default (only when needed)
-  },
-  currentTier: {
-    type: String,
-    enum: ['HOT', 'WARM', 'COLD'],
-    default: 'HOT',
-    required: true,
-    index: true
   },
   size: {
     type: Number,
@@ -67,10 +61,33 @@ const FileSchema = new mongoose.Schema({
 });
 
 // Compound indexes for performance
-FileSchema.index({ currentTier: 1, lastAccessDate: 1 });
+FileSchema.index({ lastAccessDate: 1 });
 FileSchema.index({ migrationStatus: 1 });
 FileSchema.index({ isLocked: 1 });
 
-const File = mongoose.model('File', FileSchema);
+// Create models for each tier collection
+export const HotTierFile = mongoose.model('HotTierFile', FileSchema, 'HotTierFiles');
+export const WarmTierFile = mongoose.model('WarmTierFile', FileSchema, 'WarmTierFiles');
+export const ColdTierFile = mongoose.model('ColdTierFile', FileSchema, 'ColdTierFiles');
 
-export default File;
+// Helper function to get the correct model based on tier
+export const getFileModelByTier = (tier) => {
+  switch (tier) {
+    case 'HOT':
+      return HotTierFile;
+    case 'WARM':
+      return WarmTierFile;
+    case 'COLD':
+      return ColdTierFile;
+    default:
+      return HotTierFile;
+  }
+};
+
+// Helper function to get all file models
+export const getAllFileModels = () => {
+  return [HotTierFile, WarmTierFile, ColdTierFile];
+};
+
+// Default export for backward compatibility (will use HotTierFile)
+export default HotTierFile;

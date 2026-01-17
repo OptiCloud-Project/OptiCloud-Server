@@ -72,18 +72,38 @@ export const shouldMigrate = (file) => {
 };
 
 /**
- * Get all files that need migration
- * @param {Model} FileModel - Mongoose File model
- * @returns {Promise<Array>} - Array of files that need migration
+ * Get all files that need migration from all tier collections
+ * @param {Array} FileModels - Array of Mongoose File models (HotTierFile, WarmTierFile, ColdTierFile)
+ * @returns {Promise<Array>} - Array of files that need migration with tier info
  */
-export const getFilesForMigration = async (FileModel) => {
-  const files = await FileModel.find({
-    migrationStatus: 'IDLE',
-    isLocked: false
-  });
+export const getFilesForMigration = async (FileModels) => {
+  const allFilesToMigrate = [];
+  const tierNames = ['HOT', 'WARM', 'COLD'];
   
-  return files.filter(file => {
-    const decision = shouldMigrate(file);
-    return decision.shouldMigrate;
-  });
+  for (let i = 0; i < FileModels.length; i++) {
+    const Model = FileModels[i];
+    const tier = tierNames[i];
+    
+    const files = await Model.find({
+      migrationStatus: 'IDLE',
+      isLocked: false
+    });
+    
+    // Add tier to each file and check if migration is needed
+    for (const file of files) {
+      const fileWithTier = { ...file.toObject(), currentTier: tier };
+      const decision = shouldMigrate(fileWithTier);
+      
+      if (decision.shouldMigrate) {
+        allFilesToMigrate.push({
+          file: file,
+          currentTier: tier,
+          targetTier: decision.targetTier,
+          model: Model
+        });
+      }
+    }
+  }
+  
+  return allFilesToMigrate;
 };

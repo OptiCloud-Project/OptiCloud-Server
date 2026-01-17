@@ -1,7 +1,7 @@
 import Agenda from 'agenda';
-import { getFilesForMigration, shouldMigrate } from '../services/decisionEngine.js';
+import { getFilesForMigration } from '../services/decisionEngine.js';
 import { migrateFile } from '../services/migrationService.js';
-import File from '../models/File.js';
+import { getAllFileModels } from '../models/File.js';
 
 /**
  * Setup migration job with Agenda.js
@@ -23,23 +23,21 @@ export const setupMigrationJob = (agenda) => {
     console.log('Running migration job...');
     
     try {
-      // Get files that need migration
-      const filesToMigrate = await getFilesForMigration(File);
+      // Get files that need migration from all tier collections
+      const allModels = getAllFileModels();
+      const filesToMigrate = await getFilesForMigration(allModels);
       
       console.log(`Found ${filesToMigrate.length} files to migrate`);
       
       // Process each file
-      for (const file of filesToMigrate) {
+      for (const fileInfo of filesToMigrate) {
         try {
-          const decision = shouldMigrate(file);
-          
-          if (decision.shouldMigrate) {
-            console.log(`Migrating ${file.fileName} from ${file.currentTier} to ${decision.targetTier}`);
-            await migrateFile(file._id.toString(), decision.targetTier);
-            console.log(`Successfully migrated ${file.fileName}`);
-          }
+          const { file, currentTier, targetTier } = fileInfo;
+          console.log(`Migrating ${file.fileName} from ${currentTier} to ${targetTier}`);
+          await migrateFile(file._id.toString(), currentTier, targetTier);
+          console.log(`Successfully migrated ${file.fileName}`);
         } catch (error) {
-          console.error(`Failed to migrate ${file.fileName}:`, error.message);
+          console.error(`Failed to migrate ${fileInfo.file.fileName}:`, error.message);
           // Error handling is done in migrateFile (retry logic)
           // Agenda.js will handle retry with exponential backoff
         }

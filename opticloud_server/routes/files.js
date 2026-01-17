@@ -1,12 +1,31 @@
 import express from 'express';
 import multer from 'multer';
 import crypto from 'crypto';
-import File from '../models/File.js';
+import { HotTierFile, getAllFileModels, getFileModelByTier } from '../models/File.js';
 import { calculateBufferHash } from '../utils/hashUtils.js';
 import { evaluateTier, shouldMigrate } from '../services/decisionEngine.js';
 import { migrateFile } from '../services/migrationService.js';
 
 const router = express.Router();
+
+/**
+ * Helper function to find a file by ID across all tier collections
+ * @param {string} fileId - File document ID
+ * @returns {Promise<{file: Object, tier: string, model: Model} | null>}
+ */
+const findFileAcrossTiers = async (fileId) => {
+  const allModels = getAllFileModels();
+  const tierNames = ['HOT', 'WARM', 'COLD'];
+  
+  for (let i = 0; i < allModels.length; i++) {
+    const Model = allModels[i];
+    const file = await Model.findById(fileId);
+    if (file) {
+      return { file, tier: tierNames[i], model: Model };
+    }
+  }
+  return null;
+};
 
 // Configure multer for memory storage (we'll save directly to MongoDB)
 const upload = multer({
@@ -32,7 +51,7 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     const { originalname, buffer, mimetype, size } = req.file;
     console.log(`Uploading file: ${originalname}, size: ${size} bytes, type: ${mimetype}`);
     
-    // Determine initial tier (always HOT for new uploads)
+    // New uploads always go to HOT tier collection
     const initialTier = 'HOT';
     
     // Calculate hash of the file
@@ -43,12 +62,11 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     const fileDataBase64 = buffer.toString('base64');
     console.log(`File converted to Base64, length: ${fileDataBase64.length}`);
     
-    // Create file document with file data stored as Base64 string in MongoDB
-    const fileDoc = new File({
+    // Create file document in HotTierFiles collection
+    const fileDoc = new HotTierFile({
       fileName: originalname,
       originalFileName: originalname,
       fileData: fileDataBase64, // Store file data as Base64 string in MongoDB
-      currentTier: initialTier,
       size: size,
       checksum: checksum,
       contentType: mimetype,
@@ -57,7 +75,7 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     });
     
     await fileDoc.save();
-    console.log(`File saved to MongoDB with ID: ${fileDoc._id}`);
+    console.log(`File saved to HotTierFiles collection with ID: ${fileDoc._id}`);
     
     res.status(201).json({
       message: 'File uploaded successfully',
@@ -65,7 +83,7 @@ router.post('/upload', upload.single('file'), async (req, res) => {
         id: fileDoc._id,
         fileName: fileDoc.fileName,
         size: fileDoc.size,
-        currentTier: fileDoc.currentTier,
+        tier: initialTier,
         uploadDate: fileDoc.uploadDate
       }
     });
@@ -86,18 +104,40 @@ router.post('/upload', upload.single('file'), async (req, res) => {
 
 /**
  * GET /api/files
- * Get all files with metadata
+ * Get all files with metadata from all tier collections
  */
 router.get('/', async (req, res) => {
   try {
-    const files = await File.find({}).sort({ uploadDate: -1 });
+    const allModels = getAllFileModels();
+    const allFiles = [];
+    
+    // Fetch files from all tier collections
+    for (const Model of allModels) {
+      const files = await Model.find({}).sort({ uploadDate: -1 });
+      
+      // Determine tier based on collection name
+      let tier = 'HOT';
+      if (Model.collection.name === 'WarmTierFiles') tier = 'WARM';
+      if (Model.collection.name === 'ColdTierFiles') tier = 'COLD';
+      
+      // Add tier to each file and push to allFiles
+      files.forEach(file => {
+        allFiles.push({
+          ...file.toObject(),
+          tier: tier
+        });
+      });
+    }
+    
+    // Sort all files by upload date
+    allFiles.sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate));
     
     // Format response for frontend
-    const formattedFiles = files.map(file => ({
+    const formattedFiles = allFiles.map(file => ({
       id: file._id.toString(),
       name: file.fileName,
       size: formatFileSize(file.size),
-      tier: file.currentTier,
+      tier: file.tier,
       status: file.migrationStatus,
       integrity: file.checksum ? 'Verified' : 'Pending',
       checksum: file.checksum,
@@ -116,21 +156,23 @@ router.get('/', async (req, res) => {
 
 /**
  * GET /api/files/:id
- * Get file metadata by ID
+ * Get file metadata by ID (searches across all tier collections)
  */
 router.get('/:id', async (req, res) => {
   try {
-    const file = await File.findById(req.params.id);
+    const result = await findFileAcrossTiers(req.params.id);
     
-    if (!file) {
+    if (!result) {
       return res.status(404).json({ error: 'File not found' });
     }
+    
+    const { file, tier } = result;
     
     res.json({
       id: file._id,
       fileName: file.fileName,
       size: file.size,
-      currentTier: file.currentTier,
+      tier: tier,
       checksum: file.checksum,
       isLocked: file.isLocked,
       migrationStatus: file.migrationStatus,
@@ -146,16 +188,21 @@ router.get('/:id', async (req, res) => {
 
 /**
  * GET /api/files/:id/download
- * Download a file
+ * Download a file (searches across all tier collections)
  */
 router.get('/:id/download', async (req, res) => {
   try {
-    // Load file with fileData included
-    const file = await File.findById(req.params.id).select('+fileData');
+    // Find file across all tier collections with fileData
+    const result = await findFileAcrossTiers(req.params.id);
     
-    if (!file) {
+    if (!result) {
       return res.status(404).json({ error: 'File not found' });
     }
+    
+    const { file: fileWithoutData, model } = result;
+    
+    // Load file with fileData included
+    const file = await model.findById(req.params.id).select('+fileData');
     
     // Check if file is locked
     if (file.isLocked) {
@@ -192,15 +239,17 @@ router.get('/:id/download', async (req, res) => {
 
 /**
  * DELETE /api/files/:id
- * Delete a file
+ * Delete a file (searches across all tier collections)
  */
 router.delete('/:id', async (req, res) => {
   try {
-    const file = await File.findById(req.params.id);
+    const result = await findFileAcrossTiers(req.params.id);
     
-    if (!file) {
+    if (!result) {
       return res.status(404).json({ error: 'File not found' });
     }
+    
+    const { file, model } = result;
     
     // Check if file is locked
     if (file.isLocked) {
@@ -209,9 +258,9 @@ router.delete('/:id', async (req, res) => {
       });
     }
     
-    // Delete file (data is stored in MongoDB, so deleting the document removes it)
-    await File.findByIdAndDelete(req.params.id);
-    console.log(`File deleted from MongoDB: ${req.params.id}`);
+    // Delete file from the appropriate collection
+    await model.findByIdAndDelete(req.params.id);
+    console.log(`File deleted from ${model.collection.name}: ${req.params.id}`);
     
     res.json({ message: 'File deleted successfully' });
     
@@ -227,34 +276,38 @@ router.delete('/:id', async (req, res) => {
  */
 router.post('/:id/migrate', async (req, res) => {
   try {
-    const file = await File.findById(req.params.id);
+    const result = await findFileAcrossTiers(req.params.id);
     
-    if (!file) {
+    if (!result) {
       return res.status(404).json({ error: 'File not found' });
     }
+    
+    const { file, tier } = result;
     
     if (file.isLocked) {
       return res.status(409).json({ error: 'File is already being migrated' });
     }
     
-    const decision = shouldMigrate(file);
+    // Add tier to file object for decision engine
+    const fileWithTier = { ...file.toObject(), currentTier: tier };
+    const decision = shouldMigrate(fileWithTier);
     
     if (!decision.shouldMigrate) {
       return res.json({ 
         message: 'File is already in the correct tier',
-        currentTier: file.currentTier
+        tier: tier
       });
     }
     
     // Trigger migration (will be handled by Agenda.js queue)
     // For now, we'll do it synchronously for manual triggers
-    const migratedFile = await migrateFile(req.params.id, decision.targetTier);
+    const migratedFile = await migrateFile(req.params.id, tier, decision.targetTier);
     
     res.json({
       message: 'Migration completed successfully',
       file: {
         id: migratedFile._id,
-        currentTier: migratedFile.currentTier,
+        tier: decision.targetTier,
         migrationStatus: migratedFile.migrationStatus
       }
     });
