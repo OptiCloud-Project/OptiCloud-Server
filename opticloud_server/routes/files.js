@@ -166,7 +166,56 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
     
-    const { file, tier } = result;
+    const { file, tier, model } = result;
+    
+    // If file is in migration process, calculate checksums in real-time
+    let sourceChecksumBeforeMigration = file.sourceChecksumBeforeMigration || null;
+    let targetChecksumAfterMigration = file.targetChecksumAfterMigration || null;
+    
+    if (file.migrationStatus === 'PROCESSING' || file.migrationStatus === 'VERIFYING') {
+      // Load file with fileData to calculate checksum
+      const fileWithData = await model.findById(req.params.id).select('+fileData');
+      
+      if (fileWithData && fileWithData.fileData) {
+        // Calculate current checksum (this is the source checksum before migration)
+        const buffer = Buffer.from(fileWithData.fileData, 'base64');
+        sourceChecksumBeforeMigration = calculateBufferHash(buffer);
+        console.log(`[API] Calculated source checksum for ${file.fileName}: ${sourceChecksumBeforeMigration}`);
+        
+        // If status is VERIFYING, try to find the target file in other tiers
+        if (file.migrationStatus === 'VERIFYING') {
+          // Search in all other tiers for a file with same fileName that's being migrated
+          const allModels = getAllFileModels();
+          const tierNames = ['HOT', 'WARM', 'COLD'];
+          
+          for (let i = 0; i < allModels.length; i++) {
+            const targetModel = allModels[i];
+            const targetTier = tierNames[i];
+            
+            // Skip current tier
+            if (targetTier === tier) continue;
+            
+            // Try to find file with same fileName, VERIFYING status, and locked in target tier
+            // Also check if it was created recently (within last 5 minutes) to ensure it's the migrated file
+            const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+            const targetFile = await targetModel.findOne({
+              fileName: file.fileName,
+              migrationStatus: 'VERIFYING',
+              isLocked: true,
+              createdAt: { $gte: fiveMinutesAgo }
+            }).select('+fileData');
+            
+            if (targetFile && targetFile.fileData) {
+              // Calculate target checksum
+              const targetBuffer = Buffer.from(targetFile.fileData, 'base64');
+              targetChecksumAfterMigration = calculateBufferHash(targetBuffer);
+              console.log(`[API] Found and calculated target checksum for ${file.fileName} in ${targetTier}: ${targetChecksumAfterMigration}`);
+              break; // Found it, no need to continue searching
+            }
+          }
+        }
+      }
+    }
     
     res.json({
       id: file._id,
@@ -174,6 +223,8 @@ router.get('/:id', async (req, res) => {
       size: file.size,
       tier: tier,
       checksum: file.checksum,
+      sourceChecksumBeforeMigration: sourceChecksumBeforeMigration,
+      targetChecksumAfterMigration: targetChecksumAfterMigration,
       isLocked: file.isLocked,
       migrationStatus: file.migrationStatus,
       lastAccessDate: file.lastAccessDate,

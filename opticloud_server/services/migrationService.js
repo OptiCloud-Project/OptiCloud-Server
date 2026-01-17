@@ -102,12 +102,14 @@ export const migrateFile = async (fileId, currentTier, targetTier) => {
     console.log(`Starting migration of ${file.fileName} from ${currentTier} to ${targetTier}`);
     
     // Step 2: Calculate checksum BEFORE migration (source file)
-    await sourceModel.findByIdAndUpdate(fileId, {
-      migrationStatus: 'VERIFYING'
-    });
-    
     const sourceHashBefore = await verifyFileIntegrity(file);
     console.log(`Source file checksum (before migration): ${sourceHashBefore}`);
+    
+    // Save source checksum in source file for display
+    await sourceModel.findByIdAndUpdate(fileId, {
+      migrationStatus: 'VERIFYING',
+      sourceChecksumBeforeMigration: sourceHashBefore
+    });
     
     // Step 3: Compare with stored checksum (if exists)
     if (file.checksum && sourceHashBefore !== file.checksum) {
@@ -125,6 +127,7 @@ export const migrateFile = async (fileId, currentTier, targetTier) => {
       fileData: file.fileData, // Copy Base64 data
       size: file.size,
       checksum: sourceHashBefore, // Use the verified hash
+      sourceChecksumBeforeMigration: sourceHashBefore, // Save source checksum for display
       contentType: file.contentType,
       lastAccessDate: file.lastAccessDate,
       uploadDate: file.uploadDate,
@@ -153,10 +156,17 @@ export const migrateFile = async (fileId, currentTier, targetTier) => {
     
     console.log(`Checksum verification passed: ${sourceHashBefore} === ${targetHashAfter}`);
     
-    // Step 7: Commit - Update target file status and delete source
+    // Step 7: Commit - Update target file status and save checksums for display
     await targetModel.findByIdAndUpdate(newFileDoc._id, {
       migrationStatus: 'IDLE',
-      isLocked: false
+      isLocked: false,
+      sourceChecksumBeforeMigration: sourceHashBefore,
+      targetChecksumAfterMigration: targetHashAfter
+    });
+    
+    // Also save target checksum in source file before deletion (for display during migration)
+    await sourceModel.findByIdAndUpdate(fileId, {
+      targetChecksumAfterMigration: targetHashAfter
     });
     
     // Delete from source collection only after successful verification

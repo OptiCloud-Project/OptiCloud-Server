@@ -24,6 +24,14 @@ const FileSchema = new mongoose.Schema({
     type: String,
     required: false // Will be calculated on upload/migration
   },
+  sourceChecksumBeforeMigration: {
+    type: String,
+    required: false // Checksum before migration (for verification display)
+  },
+  targetChecksumAfterMigration: {
+    type: String,
+    required: false // Checksum after migration (for verification display)
+  },
   isLocked: {
     type: Boolean,
     default: false,
