@@ -92,56 +92,95 @@ const verifyFileIntegrity = async (file) => {
  */
 export const migrateFile = async (fileId, currentTier, targetTier) => {
   let fileInfo;
+  let newFileDoc = null;
   
   try {
     // Step 1: Lock the file
     fileInfo = await lockFile(fileId, currentTier);
     const { file, model: sourceModel } = fileInfo;
     
-    // Step 2: Verify integrity (recalculate hash)
+    console.log(`Starting migration of ${file.fileName} from ${currentTier} to ${targetTier}`);
+    
+    // Step 2: Calculate checksum BEFORE migration (source file)
     await sourceModel.findByIdAndUpdate(fileId, {
       migrationStatus: 'VERIFYING'
     });
     
-    const calculatedHash = await verifyFileIntegrity(file);
+    const sourceHashBefore = await verifyFileIntegrity(file);
+    console.log(`Source file checksum (before migration): ${sourceHashBefore}`);
     
-    // Step 3: Compare with stored checksum
-    if (file.checksum && calculatedHash !== file.checksum) {
+    // Step 3: Compare with stored checksum (if exists)
+    if (file.checksum && sourceHashBefore !== file.checksum) {
       await unlockFile(fileId, currentTier, 'FAILED');
-      throw new Error('Hash mismatch - file integrity check failed');
+      throw new Error(`Source file integrity check failed: stored checksum (${file.checksum}) does not match calculated (${sourceHashBefore})`);
     }
     
-    // Step 4: Commit - Copy to target collection and delete from source
+    // Step 4: Copy to target collection
     const targetModel = getFileModelByTier(targetTier);
     
     // Create new document in target collection
-    const newFileDoc = new targetModel({
+    newFileDoc = new targetModel({
       fileName: file.fileName,
       originalFileName: file.originalFileName,
       fileData: file.fileData, // Copy Base64 data
       size: file.size,
-      checksum: calculatedHash,
+      checksum: sourceHashBefore, // Use the verified hash
       contentType: file.contentType,
       lastAccessDate: file.lastAccessDate,
       uploadDate: file.uploadDate,
       lastMigrationDate: new Date(),
-      migrationStatus: 'IDLE',
-      isLocked: false,
+      migrationStatus: 'VERIFYING', // Keep in VERIFYING until we verify the copy
+      isLocked: true, // Keep locked until verification is complete
       retryAttempts: 0
     });
     
     await newFileDoc.save();
     console.log(`File copied to ${targetTier} collection with ID: ${newFileDoc._id}`);
     
-    // Delete from source collection
+    // Step 5: Verify integrity AFTER migration (target file)
+    // Reload the new file to get fresh data
+    const targetFile = await targetModel.findById(newFileDoc._id).select('+fileData');
+    const targetHashAfter = await verifyFileIntegrity(targetFile);
+    console.log(`Target file checksum (after migration): ${targetHashAfter}`);
+    
+    // Step 6: Compare source and target checksums
+    if (sourceHashBefore !== targetHashAfter) {
+      // Rollback: Delete target file
+      await targetModel.findByIdAndDelete(newFileDoc._id);
+      await unlockFile(fileId, currentTier, 'FAILED');
+      throw new Error(`Checksum mismatch after migration: source (${sourceHashBefore}) !== target (${targetHashAfter}). Migration aborted, source file preserved.`);
+    }
+    
+    console.log(`Checksum verification passed: ${sourceHashBefore} === ${targetHashAfter}`);
+    
+    // Step 7: Commit - Update target file status and delete source
+    await targetModel.findByIdAndUpdate(newFileDoc._id, {
+      migrationStatus: 'IDLE',
+      isLocked: false
+    });
+    
+    // Delete from source collection only after successful verification
     await sourceModel.findByIdAndDelete(fileId);
     console.log(`File deleted from ${currentTier} collection: ${fileId}`);
     
-    console.log(`File ${file.fileName} migrated from ${currentTier} to ${targetTier}`);
+    console.log(`✓ File ${file.fileName} successfully migrated from ${currentTier} to ${targetTier} with verified integrity`);
     
-    return newFileDoc;
+    // Reload final file document
+    const finalFile = await targetModel.findById(newFileDoc._id);
+    return finalFile;
     
   } catch (error) {
+    // Cleanup: If target file was created but verification failed, delete it
+    if (newFileDoc && newFileDoc._id) {
+      try {
+        const targetModel = getFileModelByTier(targetTier);
+        await targetModel.findByIdAndDelete(newFileDoc._id);
+        console.log(`Cleaned up target file after error: ${newFileDoc._id}`);
+      } catch (cleanupError) {
+        console.error('Error cleaning up target file:', cleanupError);
+      }
+    }
+    
     // Handle errors and update retry attempts
     if (fileInfo && fileInfo.file) {
       const { file, model } = fileInfo;
