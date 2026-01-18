@@ -74,8 +74,8 @@ export const setupRecoveryJob = (agenda) => {
     }
   });
   
-  // Run recovery job every 10 minutes
-  agenda.every('10 minutes', 'recover stuck migrations');
+  // Run recovery job every 1 minute
+  agenda.every('1 minute', 'recover stuck migrations');
   
-  console.log('Recovery job scheduled to run every 10 minutes');
+  console.log('Recovery job scheduled to run every 1 minute');
 };

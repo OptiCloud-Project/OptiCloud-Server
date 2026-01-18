@@ -214,24 +214,92 @@ export const migrateFile = async (fileId, currentTier, targetTier) => {
 
 /**
  * Recover stuck migrations (files in PROCESSING or VERIFYING state)
+ * Handles duplicate files that may exist in both source and target tiers
  * @returns {Promise<Array>} - Array of recovered files
  */
 export const recoverStuckMigrations = async () => {
   const allModels = getAllFileModels();
+  const tierNames = ['HOT', 'WARM', 'COLD'];
   const allStuckFiles = [];
   
-  for (const Model of allModels) {
-    const stuckFiles = await Model.find({
+  for (let i = 0; i < allModels.length; i++) {
+    const sourceModel = allModels[i];
+    const sourceTier = tierNames[i];
+    
+    const stuckFiles = await sourceModel.find({
       migrationStatus: { $in: ['PROCESSING', 'VERIFYING'] },
       isLocked: true
     });
     
     for (const file of stuckFiles) {
-      // Reset to IDLE and unlock
-      file.migrationStatus = 'IDLE';
-      file.isLocked = false;
-      await file.save();
-      allStuckFiles.push(file);
+      console.log(`[Recovery] Found stuck file: ${file.fileName} in ${sourceTier} tier`);
+      
+      // If file is in VERIFYING state, it means it was copied to target but verification didn't complete
+      // Check if duplicate exists in other tiers
+      if (file.migrationStatus === 'VERIFYING') {
+        let duplicateFound = false;
+        
+        // Search in all other tiers for duplicate file
+        for (let j = 0; j < allModels.length; j++) {
+          if (i === j) continue; // Skip current tier
+          
+          const targetModel = allModels[j];
+          const targetTier = tierNames[j];
+          
+          // Look for file with same fileName and checksum in target tier
+          // Also check if it was created recently (within last 10 minutes) to ensure it's from the same migration
+          const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+          const duplicate = await targetModel.findOne({
+            fileName: file.fileName,
+            $or: [
+              { checksum: file.checksum },
+              { checksum: file.sourceChecksumBeforeMigration },
+              { sourceChecksumBeforeMigration: file.sourceChecksumBeforeMigration }
+            ],
+            createdAt: { $gte: tenMinutesAgo },
+            migrationStatus: { $in: ['PROCESSING', 'VERIFYING', 'IDLE'] }
+          });
+          
+          if (duplicate) {
+            console.log(`[Recovery] Found duplicate of ${file.fileName} in ${targetTier} tier. Deleting source file from ${sourceTier}.`);
+            
+            // Migration was almost complete - target file exists
+            // Delete source file and unlock target file
+            await sourceModel.findByIdAndDelete(file._id);
+            
+            // Unlock and set target file to IDLE if it's still locked
+            if (duplicate.isLocked || duplicate.migrationStatus !== 'IDLE') {
+              await targetModel.findByIdAndUpdate(duplicate._id, {
+                migrationStatus: 'IDLE',
+                isLocked: false
+              });
+              console.log(`[Recovery] Unlocked target file ${duplicate.fileName} in ${targetTier}`);
+            }
+            
+            duplicateFound = true;
+            allStuckFiles.push({ file, action: 'deleted_source', duplicateTier: targetTier });
+            break;
+          }
+        }
+        
+        // If no duplicate found, the migration failed before copy completed
+        // Delete any partial target file and reset source
+        if (!duplicateFound) {
+          console.log(`[Recovery] No duplicate found for ${file.fileName}. Resetting source file to IDLE.`);
+          file.migrationStatus = 'IDLE';
+          file.isLocked = false;
+          await file.save();
+          allStuckFiles.push({ file, action: 'reset_source' });
+        }
+      } else {
+        // File is in PROCESSING state - migration didn't complete copy yet
+        // Just reset to IDLE (no duplicate should exist)
+        console.log(`[Recovery] Resetting ${file.fileName} from PROCESSING to IDLE.`);
+        file.migrationStatus = 'IDLE';
+        file.isLocked = false;
+        await file.save();
+        allStuckFiles.push({ file, action: 'reset_source' });
+      }
     }
   }
   
