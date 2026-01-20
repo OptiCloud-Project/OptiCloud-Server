@@ -371,6 +371,45 @@ router.post('/:id/migrate', async (req, res) => {
 });
 
 /**
+ * POST /api/files/:id/simulate-last-access-30-days
+ * Simulate that the file was last accessed 30 days ago by updating lastAccessDate
+ */
+router.post('/:id/simulate-last-access-30-days', async (req, res) => {
+  try {
+    const result = await findFileAcrossTiers(req.params.id);
+
+    if (!result) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    const { file, model } = result;
+
+    // Calculate new lastAccessDate: 30 days earlier than current lastAccessDate (if exists),
+    // otherwise 30 days earlier than now. This makes the simulation cumulative per click.
+    const currentLastAccess = file.lastAccessDate ? new Date(file.lastAccessDate) : new Date();
+    const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+    const newLastAccessDate = new Date(currentLastAccess.getTime() - thirtyDaysMs);
+
+    file.lastAccessDate = newLastAccessDate;
+    await file.save();
+
+    console.log(`Simulated lastAccessDate -30 days for file ${file.fileName} (${file._id}). New lastAccessDate: ${file.lastAccessDate.toISOString()}`);
+
+    res.json({
+      message: 'Last access date simulated to 30 days ago successfully',
+      file: {
+        id: file._id,
+        fileName: file.fileName,
+        lastAccessDate: file.lastAccessDate
+      }
+    });
+  } catch (error) {
+    console.error('Error simulating last access date:', error);
+    res.status(500).json({ error: 'Simulation failed', details: error.message });
+  }
+});
+
+/**
  * Helper function to format file size
  */
 function formatFileSize(bytes) {
