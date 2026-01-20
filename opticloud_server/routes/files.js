@@ -137,6 +137,7 @@ router.get('/', async (req, res) => {
       id: file._id.toString(),
       name: file.fileName,
       size: formatFileSize(file.size),
+      sizeBytes: file.size, // Add raw size in bytes for cost calculation
       tier: file.tier,
       status: file.migrationStatus,
       integrity: file.checksum ? 'Verified' : 'Pending',
