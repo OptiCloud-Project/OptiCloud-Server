@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import { install as installLogBuffer, getLogs } from './utils/logBuffer.js';
 import { connectDB } from './config/database.js';
 import fileRoutes from './routes/files.js';
 import Agenda from 'agenda';
@@ -8,6 +9,9 @@ import { setupMigrationJob, setupRecoveryJob } from './jobs/migrationJob.js';
 
 // Load environment variables
 dotenv.config();
+
+// Capture console output for Admin logs UI
+installLogBuffer();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -23,6 +27,16 @@ app.use('/api/files', fileRoutes);
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Admin logs - backend terminal output for Admin logs UI
+app.get('/api/logs', (req, res) => {
+  try {
+    const logs = getLogs();
+    res.json({ logs });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch logs', details: err.message });
+  }
 });
 
 // Initialize Agenda.js for job scheduling
