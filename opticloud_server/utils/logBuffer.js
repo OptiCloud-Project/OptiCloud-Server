@@ -21,9 +21,28 @@ function formatArgs(args) {
   }).join(' ');
 }
 
+/** Messages to show in terminal only; hide from Admin Logs UI */
+function shouldSkipForAdminLogs(level, text) {
+  if (level === 'error') {
+    return (
+      text.includes('Duplicate schema index') &&
+      (text.includes('MONGOOSE') || text.includes('schema.index'))
+    );
+  }
+  if (level === 'log') {
+    return (
+      text.includes('MongoDB Connected:') ||
+      text.includes('Server running on port') ||
+      text.includes('Environment:')
+    );
+  }
+  return false;
+}
+
 function push(level, ...args) {
   const ts = new Date().toISOString();
   const text = formatArgs(args);
+  if (shouldSkipForAdminLogs(level, text)) return;
   entries.push({ ts, level, text });
   if (entries.length > MAX_ENTRIES) {
     entries.splice(0, entries.length - MAX_ENTRIES);
