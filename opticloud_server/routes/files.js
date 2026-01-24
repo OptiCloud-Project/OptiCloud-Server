@@ -2,6 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import crypto from 'crypto';
 import { HotTierFile, getAllFileModels, getFileModelByTier } from '../models/File.js';
+import { getMigrationStats } from '../models/MigrationStats.js';
 import { calculateBufferHash } from '../utils/hashUtils.js';
 import { evaluateTier, shouldMigrate } from '../services/decisionEngine.js';
 import { migrateFile } from '../services/migrationService.js';
@@ -152,6 +153,21 @@ router.get('/', async (req, res) => {
   } catch (error) {
     console.error('Error fetching files:', error);
     res.status(500).json({ error: 'Failed to fetch files', details: error.message });
+  }
+});
+
+/**
+ * GET /api/files/stats
+ * Get migration stats (total migrations for fines calculation)
+ * Must be defined before /:id so "stats" is not matched as id.
+ */
+router.get('/stats', async (req, res) => {
+  try {
+    const stats = await getMigrationStats();
+    res.json(stats);
+  } catch (error) {
+    console.error('Error fetching migration stats:', error);
+    res.status(500).json({ error: 'Failed to fetch migration stats', details: error.message });
   }
 });
 

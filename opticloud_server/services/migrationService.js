@@ -1,4 +1,5 @@
 import { getFileModelByTier, getAllFileModels } from '../models/File.js';
+import { incrementMigrationCount } from '../models/MigrationStats.js';
 import { calculateBufferHash } from '../utils/hashUtils.js';
 
 /**
@@ -172,7 +173,10 @@ export const migrateFile = async (fileId, currentTier, targetTier) => {
     // Delete from source collection only after successful verification
     await sourceModel.findByIdAndDelete(fileId);
     console.log(`File deleted from ${currentTier} collection: ${fileId}`);
-    
+
+    // Record migration for fines ($0.10 per migration)
+    await incrementMigrationCount();
+
     console.log(`✓ File ${file.fileName} successfully migrated from ${currentTier} to ${targetTier} with verified integrity`);
     
     // Reload final file document
@@ -266,6 +270,9 @@ export const recoverStuckMigrations = async () => {
             // Migration was almost complete - target file exists
             // Delete source file and unlock target file
             await sourceModel.findByIdAndDelete(file._id);
+
+            // Record migration for fines ($0.10 per migration)
+            await incrementMigrationCount();
             
             // Unlock and set target file to IDLE if it's still locked
             if (duplicate.isLocked || duplicate.migrationStatus !== 'IDLE') {
