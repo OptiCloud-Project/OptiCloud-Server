@@ -266,14 +266,17 @@ export const recoverStuckMigrations = async () => {
           
           if (duplicate) {
             console.log(`[Recovery] Found duplicate of ${file.fileName} in ${targetTier} tier. Deleting source file from ${sourceTier}.`);
-            
+
+            // Migration had crashed; log for Admin Logs (persisted)
+            console.log(`[Recovery] Migration had crashed; recovered file "${file.fileName}" (was VERIFYING). Kept target in ${targetTier}.`);
+
             // Migration was almost complete - target file exists
             // Delete source file and unlock target file
             await sourceModel.findByIdAndDelete(file._id);
 
             // Record migration for fines ($0.10 per migration)
             await incrementMigrationCount();
-            
+
             // Unlock and set target file to IDLE if it's still locked
             if (duplicate.isLocked || duplicate.migrationStatus !== 'IDLE') {
               await targetModel.findByIdAndUpdate(duplicate._id, {
@@ -282,17 +285,18 @@ export const recoverStuckMigrations = async () => {
               });
               console.log(`[Recovery] Unlocked target file ${duplicate.fileName} in ${targetTier}`);
             }
-            
+
             duplicateFound = true;
             allStuckFiles.push({ file, action: 'deleted_source', duplicateTier: targetTier });
             break;
           }
         }
-        
+
         // If no duplicate found, the migration failed before copy completed
         // Delete any partial target file and reset source
         if (!duplicateFound) {
           console.log(`[Recovery] No duplicate found for ${file.fileName}. Resetting source file to IDLE.`);
+          console.log(`[Recovery] Migration had crashed; recovered file "${file.fileName}" (was VERIFYING). Reset to IDLE.`);
           file.migrationStatus = 'IDLE';
           file.isLocked = false;
           await file.save();
@@ -302,6 +306,7 @@ export const recoverStuckMigrations = async () => {
         // File is in PROCESSING state - migration didn't complete copy yet
         // Just reset to IDLE (no duplicate should exist)
         console.log(`[Recovery] Resetting ${file.fileName} from PROCESSING to IDLE.`);
+        console.log(`[Recovery] Migration had crashed; recovered file "${file.fileName}" (was PROCESSING). Reset to IDLE.`);
         file.migrationStatus = 'IDLE';
         file.isLocked = false;
         await file.save();

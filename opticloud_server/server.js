@@ -1,7 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { install as installLogBuffer, getLogs } from './utils/logBuffer.js';
+import { install as installLogBuffer, getLogs, hydrate, setPersistence } from './utils/logBuffer.js';
+import { loadRecent, append as persistAppend } from './utils/logPersistence.js';
 import { connectDB } from './config/database.js';
 import fileRoutes from './routes/files.js';
 import Agenda from 'agenda';
@@ -73,16 +74,20 @@ const startServer = async () => {
   try {
     // Connect to MongoDB
     await connectDB();
-    
+
+    // Load persisted admin logs and enable persistence
+    const persisted = await loadRecent();
+    hydrate(persisted);
+    setPersistence(persistAppend);
+
     // Initialize Agenda.js
     await initializeAgenda();
-    
+
     // Start Express server
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
       console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
     });
-    
   } catch (error) {
     console.error('Failed to start server:', error);
     process.exit(1);

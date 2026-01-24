@@ -39,18 +39,37 @@ function shouldSkipForAdminLogs(level, text) {
   return false;
 }
 
+let persistAppend = null;
+
 function push(level, ...args) {
   const ts = new Date().toISOString();
   const text = formatArgs(args);
   if (shouldSkipForAdminLogs(level, text)) return;
-  entries.push({ ts, level, text });
+  const entry = { ts, level, text };
+  entries.push(entry);
   if (entries.length > MAX_ENTRIES) {
     entries.splice(0, entries.length - MAX_ENTRIES);
+  }
+  if (persistAppend) {
+    persistAppend(entry).catch(() => {});
   }
 }
 
 export function getLogs() {
   return [...entries];
+}
+
+/** Load persisted logs (oldest first) and replace buffer. Call after DB connect. */
+export function hydrate(logEntries) {
+  entries.length = 0;
+  if (Array.isArray(logEntries) && logEntries.length) {
+    entries.push(...logEntries);
+  }
+}
+
+/** Enable persistence: appendFn(entry) saves to DB. Call after DB connect. */
+export function setPersistence(appendFn) {
+  persistAppend = typeof appendFn === 'function' ? appendFn : null;
 }
 
 export function install() {
