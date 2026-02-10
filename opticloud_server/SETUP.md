@@ -1,9 +1,9 @@
-# הוראות הרצה - OptiCloud Server
+# Setup Instructions - OptiCloud Server
 
-## שלב 1: הגדרת MongoDB
+## Step 1: MongoDB Setup
 
-1. צור קובץ `.env` בתיקיית `opticloud_server`
-2. הוסף את ה-MongoDB connection string שלך:
+1. Create a `.env` file in the `opticloud_server` directory
+2. Add your MongoDB connection string:
 
 ```env
 MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/opticloud?retryWrites=true&w=majority
@@ -12,18 +12,18 @@ NODE_ENV=development
 AGENDA_DB_URI=mongodb+srv://username:password@cluster.mongodb.net/opticloud?retryWrites=true&w=majority
 ```
 
-**חשוב:** החלף `username`, `password`, ו-`cluster` עם הפרטים שלך מ-MongoDB Atlas.
+**Important:** Replace `username`, `password`, and `cluster` with your details from MongoDB Atlas.
 
-## שלב 2: התקנת Dependencies
+## Step 2: Install Dependencies
 
 ```bash
 cd OptiCloud-Server/opticloud_server
 npm install
 ```
 
-## שלב 3: הרצת השרת
+## Step 3: Run the Server
 
-### Development Mode (עם auto-reload):
+### Development Mode (with auto-reload):
 ```bash
 npm run dev
 ```
@@ -33,13 +33,13 @@ npm run dev
 npm start
 ```
 
-השרת ירוץ על: `http://localhost:3001`
+The server will run on: `http://localhost:3001`
 
-## בדיקת שהשרת עובד
+## Test the Server
 
-פתח בדפדפן או ב-Postman:
+Open in browser or Postman:
 ```
 http://localhost:3001/health
 ```
 
-אמור להחזיר: `{"status":"ok","timestamp":"..."}`
+Should return: `{"status":"ok","timestamp":"..."}`
